@@ -1,0 +1,883 @@
+{
+  "AWSTemplateFormatVersion":"2010-09-09",
+  "Description":"AWS CloudFormation Stack for ECS Infrastructure",
+  "Parameters":{
+    "KeyName":{
+      "Type":"AWS::EC2::KeyPair::KeyName",
+      "Description":"Name of an existing EC2 KeyPair to enable SSH access to the ECS instances."
+    },
+    "InstanceType":{
+      "Description":"EC2 instance type",
+      "Type":"String",
+      "Default":"t2.micro",
+      "AllowedValues":[
+        "t2.micro",
+        "t2.small",
+        "t2.medium",
+        "t2.large",
+        "m3.medium"
+      ],
+      "ConstraintDescription":"Please choose a valid instance type."
+    },
+    "VpcId":{
+      "Type":"AWS::EC2::VPC::Id",
+      "Description":"Select a VPC that allows instances to access the Internet."},
+
+    "SecurityGroup": {
+      "Description": "Select the Security Group to apply to the Application Load Balancer",
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "DBSecurityGroup":{
+      "Description":"DB Security Group",
+      "Type":"String",
+      "Default":"xxxxxx"
+    },
+    "SubnetId1": {
+      "Description": "subnet",
+      "Type": "String",
+      "Default": "subnet-xxxxxx"
+    },
+    "SubnetId2": {
+      "Description": "subnet",
+      "Type": "String",
+      "Default": "subnet-xxxxx"
+    },
+    "Tier":{
+      "Type" : "String",
+      "Default" : "dev",
+      "AllowedValues" : ["dev", "pprd","prod"],
+      "Description" : "Select the Tier to deploy application"
+    },
+    "MinSize":{
+      "Type":"String",
+      "Default":"1"
+    },
+    "OperatorEmail" : {
+      "Default" : "xxxxx@gmail.com",
+      "Description" : "EMail address to notify if there are any operational issues",
+      "Type" : "String"
+    },
+    "DockerUser":{
+      "Type": "String",
+      "Default": "Docker Registry access",
+      "Description": "username"
+    },
+    "DockerPass":{
+      "Type": "String",
+      "Description": "password",
+      "NoEcho": true
+    },
+    "DesiredCapacity":{
+      "Type":"Number",
+      "Default":"1",
+      "Description":"Number of instances to launch in your ECS cluster."
+    },
+    "MaxSize":{
+      "Type":"Number",
+      "Default":"1",
+      "Description":"Maximum number of instances that can be launched in your ECS cluster."
+    },
+    "Owner":{
+      "Type":"String",
+      "Default":"xxxxxxx",
+      "Description":"Owner of this Stack"
+    }
+  },
+  "Conditions":{
+    "CreateDashboard":{"Fn::Equals":[{"Ref":"Tier"},"prod"]}
+  },
+
+  "Mappings":{
+    "AWSRegionToAMI":{
+      "us-east-1":{
+        "AMIID":"ami-eca289fb"
+      }
+    }
+  },
+  "Resources":{
+
+    "ECSCluster":{
+      "Type":"AWS::ECS::Cluster",
+      "Properties" : {
+        "ClusterName" : {
+          "Ref": "AWS::StackName"
+        }
+      }
+    },
+
+    "ECSALB":{
+      "Type":"AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties":{
+        "Name": { "Fn::Sub": "${Tier}-alb" },
+        "Scheme":"internet-facing",
+        "LoadBalancerAttributes":[
+          {
+            "Key":"idle_timeout.timeout_seconds",
+            "Value":"300"
+          }
+        ],
+        "Subnets": [
+          {
+            "Ref": "SubnetId1"
+          },
+          {
+            "Ref": "SubnetId2"
+          }
+        ],
+        "SecurityGroups":[
+          {
+            "Ref":"SecurityGroup"
+          }
+        ],
+        "Tags":[
+          {
+            "Key":"Name",
+            "Value":{ "Fn::Sub": "${Tier}-alb" }
+          },
+          {
+            "Key": "Environment",
+            "Value": { "Ref":"Tier" }
+          },
+          {
+            "Key":"Payer",
+            "Value" : "xxxxx"
+          },
+          {
+            "Key":"Owner",
+            "Value" : {"Ref":"Owner"}
+          },
+          {
+            "Key":"Service",
+            "Value":"ECS"
+          }
+        ]
+      }
+    },
+
+    "HTTPListener":{
+      "Type":"AWS::ElasticLoadBalancingV2::Listener",
+      "Properties":{
+        "DefaultActions": [
+          {
+            "Type":"redirect",
+            "RedirectConfig": {
+              "Host" : "#{host}",
+              "Path" : "/#{path}",
+              "Port" : 443,
+              "Protocol" : "HTTPS",
+              "Query" : "#{query}",
+              "StatusCode" : "HTTP_301"
+            }
+          }
+        ],
+        "LoadBalancerArn":{"Ref":"ECSALB"},
+        "Port":"80",
+        "Protocol":"HTTP"
+      }
+    },
+
+    "HTTPSListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "DefaultActions":[{
+          "Type":"fixed-response",
+          "FixedResponseConfig":
+          {"ContentType":"text/html",
+            "MessageBody":"<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body,html{height:100%;margin:0;}.bg {background-image: url(\"https://i.gifer.com/EKkZ.gif\");height: 100%;background-position: center;background-repeat: no-repeat;background-size: cover;}</style></head><body><div class=\"bg\"></div></body></html>",
+            "StatusCode":"503"
+          }
+        }],
+        "Port":"443",
+        "Protocol":"HTTPS",
+        "LoadBalancerArn":{"Ref":"ECSALB"},
+        "Certificates" : [
+          {"CertificateArn" : "arn:aws:acm:us-east-1:xxxxxxxx:certificate/xxxxxxxxxxxx"}
+        ]
+      }
+    },
+
+    "ListenerCertificate":{
+      "Type" : "AWS::ElasticLoadBalancingV2::ListenerCertificate",
+      "Properties" : {
+        "Certificates" : [
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxx"},
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxx"},
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxx"},
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxx"},
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxxx"},
+          {"CertificateArn": "arn:aws:acm:us-east-1:xxxxxxxxxxxxx:certificate/xxxxxx"}
+        ],
+        "ListenerArn" : {"Ref":"HTTPSListener"}
+      }
+    },
+
+    "MountTargetSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName":{ "Fn::Sub":"${Tier}-EFS-sg"},
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "Security group for mount target",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": { "Fn::Sub": "${Tier}-EFS" }
+          },
+          {
+            "Key": "Tier",
+            "Value": { "Fn::Sub": "${Tier}" }
+          },
+          {
+            "Key": "Environment",
+            "Value": { "Ref":"Tier" }
+          },
+          {
+            "Key": "ProjectName",
+            "Value": { "Fn::Sub": "${Tier}" }
+          },
+          {
+            "Key":"Payer",
+            "Value" : "xxxxxx"
+          },
+          {
+            "Key":"Owner",
+            "Value" : {"Ref":"Owner"}
+          },
+          {
+            "Key":"Service",
+            "Value" : "ECS"
+          }
+        ]
+      }
+    },
+    "OutboundRule": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties":{
+        "IpProtocol": "tcp",
+        "FromPort": "2049",
+        "ToPort": "2049",
+        "DestinationSecurityGroupId": {"Fn::GetAtt": ["MountTargetSecurityGroup", "GroupId"]},
+        "GroupId": {"Fn::GetAtt": ["MountTargetSecurityGroup", "GroupId"]}
+      }
+    },
+    "InboundRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties":{
+        "IpProtocol": "tcp",
+        "FromPort": "2049",
+        "ToPort": "2049",
+        "GroupId": {"Fn::GetAtt": ["MountTargetSecurityGroup", "GroupId"]},
+        "SourceSecurityGroupId":{"Fn::GetAtt": ["MountTargetSecurityGroup", "GroupId"]}
+      }
+    },
+    "FileSystem": {
+      "Type": "AWS::EFS::FileSystem",
+      "Properties": {
+        "KmsKeyId":"1dd6973c-d71a-4dbe-a2cd-715936083e88",
+        "Encrypted": true,
+        "FileSystemTags": [
+          {
+            "Key": "Name",
+            "Value": { "Fn::Sub": "${Tier}-keyvolume" }
+          },
+          {
+            "Key": "Tier",
+            "Value": { "Fn::Sub": "${Tier}" }
+          },
+          {
+            "Key": "Environment",
+            "Value": { "Ref":"Tier" }
+          },
+          {
+            "Key": "ProjectName",
+            "Value": { "Fn::Sub": "${Tier}" }
+          },
+          {
+            "Key":"Payer",
+            "Value" : "ita-aws007"
+          },
+          {
+            "Key":"Owner",
+            "Value":{"Ref":"Owner"}
+          },
+          {
+            "Key":"Service",
+            "Value" : "ECS"
+          }
+        ]
+      }
+    },
+
+    "MountTarget1": {
+      "Type": "AWS::EFS::MountTarget",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "FileSystem"
+        },
+        "SubnetId": {
+          "Ref": "SubnetId1"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "MountTargetSecurityGroup"
+          }
+        ]
+      }
+    },
+
+    "MountTarget2": {
+      "Type": "AWS::EFS::MountTarget",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "FileSystem"
+        },
+        "SubnetId": {
+          "Ref": "SubnetId2"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "MountTargetSecurityGroup"
+          }
+        ]
+      }
+    },
+
+    "ECSAutoScalingGroup":{
+      "Type":"AWS::AutoScaling::AutoScalingGroup",
+      "DependsOn": ["MountTarget1", "MountTarget2"],
+      "Properties":{
+        "VPCZoneIdentifier":[
+          {
+            "Ref": "SubnetId1"
+          },
+          {
+            "Ref": "SubnetId2"
+          }
+        ],
+        "LaunchConfigurationName":{
+          "Ref":"Ec2Instance"
+        },
+        "MinSize":{"Ref":"MinSize"},
+        "MaxSize":{
+          "Ref":"MaxSize"
+        },
+        "DesiredCapacity":{
+          "Ref":"DesiredCapacity"
+        },
+        "Tags":[
+          {
+            "PropagateAtLaunch": true,
+            "Key" : "Tier",
+            "Value" : {"Ref":"Tier"}
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"Name",
+            "Value" : {"Ref":"ECSCluster"}
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"Environment",
+            "Value" : {"Ref":"Tier"}
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"Payer",
+            "Value" : "ita-aws007"
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"ProjectName",
+            "Value" : { "Fn::Sub": "${Tier}" }
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"Owner",
+            "Value" : {"Ref":"Owner"}
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key":"Service",
+            "Value" : "ECS"
+          }
+        ]
+      },
+      "CreationPolicy":{
+        "ResourceSignal":{
+          "Timeout":"PT15M"
+        }
+      },
+      "UpdatePolicy":{
+        "AutoScalingReplacingUpdate":{
+          "WillReplace":"true"
+        }
+      }
+    },
+    "StepScaling" : {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "DependsOn": ["MountTarget1", "MountTarget2","ECSAutoScalingGroup"],
+      "Properties" : {
+        "AdjustmentType" : "ChangeInCapacity",
+        "AutoScalingGroupName" : { "Ref" : "ECSAutoScalingGroup" },
+        "PolicyType" : "StepScaling",
+        "MetricAggregationType" : "Average",
+        "EstimatedInstanceWarmup" : "60",
+        "StepAdjustments": [
+          {
+            "MetricIntervalLowerBound": "0",
+            "MetricIntervalUpperBound" : "50",
+            "ScalingAdjustment": "1"
+          },
+          {
+            "MetricIntervalLowerBound": "50",
+            "ScalingAdjustment": "2"
+          }
+        ]
+      }
+    },
+    "Ec2Instance":{
+      "Type":"AWS::AutoScaling::LaunchConfiguration",
+      "Metadata": {
+        "AWS::CloudFormation::Init": {
+          "configSets": {
+            "Install": [
+              "Install"
+            ]
+          },
+          "Install": {
+            "packages": {
+              "yum": {
+                "python27": []
+              }
+            },
+            "files": {
+              "/etc/cfn/cfn-hup.conf": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "[main]\n",
+                      "stack=",
+                      {
+                        "Ref": "AWS::StackId"
+                      },
+                      "\n",
+                      "region=",
+                      {
+                        "Ref": "AWS::Region"
+                      },
+                      "\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "[cfn-auto-reloader-hook]\n",
+                      "triggers=post.update\n",
+                      "path=Resources.Ec2Instance.Metadata.AWS::CloudFormation::Init\n",
+                      "action=/opt/aws/bin/cfn-init -v ",
+                      "         --stack ",
+                      {
+                        "Ref": "AWS::StackName"
+                      },
+                      "         --resource Ec2Instance ",
+                      "         --region ",
+                      {
+                        "Ref": "AWS::Region"
+                      },
+                      "\n",
+                      "runas=root\n"
+                    ]
+                  ]
+                }
+              }
+            },
+            "services": {
+              "sysvinit": {
+                "cfn-hup": {
+                  "enabled": "true",
+                  "ensureRunning": "true",
+                  "files": [
+                    "/etc/cfn/cfn-hup.conf",
+                    "/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "Properties":{
+        "ImageId":{
+          "Fn::FindInMap":[
+            "AWSRegionToAMI",
+            {
+              "Ref":"AWS::Region"
+            },
+            "AMIID"
+          ]
+        },
+        "AssociatePublicIpAddress":"true",
+        "SecurityGroups":[
+          {
+            "Ref":"SecurityGroup"
+          },
+          {
+            "Ref":"MountTargetSecurityGroup"
+          },
+          {
+            "Ref":"DBSecurityGroup"
+          }
+        ],
+        "InstanceType":{
+          "Ref":"InstanceType"
+        },
+        "IamInstanceProfile":{
+          "Ref":"EC2InstanceProfile"
+        },
+        "KeyName":{
+          "Ref":"KeyName"
+        },
+
+        "UserData":{
+          "Fn::Base64":{
+            "Fn::Join":[
+              "",
+              [
+                "#!/bin/bash -xe\n",
+                "sudo yum install -y nfs-utils nfs-utils-lib aws-cli at jq\n",
+                "sudo yum update -y\n",
+                "mkdir -p /apps/logs/log-demux/access\n",
+                "touch /apps/logs/",{ "Fn::Sub": "${Tier}.log" },"\n",
+                "chown -R 1000:1000 /apps/logs\n",
+                "sed -i '/$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat/s/^/#/' /etc/rsyslog.conf\n",
+                "sed -i '/#$ModLoad imudp/s/^#//' /etc/rsyslog.conf\n",
+                "sed -i '/#$UDPServerRun 514/s/^#//' /etc/rsyslog.conf\n",
+                "sed -i '/#$ModLoad imtcp/s/^#//' /etc/rsyslog.conf\n",
+                "sed -i '/#$InputTCPServerRun 514/s/^#//' /etc/rsyslog.conf\n",
+                "sed -i -r 's/^(\\*\\.info[^ ]+)(.*messages)$/\\1;local4.none\\2/' /etc/rsyslog.conf\n",
+                "/etc/init.d/rsyslog restart\n",
+                "sudo rm -rf /etc/ecs/ecs.config\n",
+                "echo ECS_CLUSTER=",
+                {
+                  "Ref": "ECSCluster"
+                },
+                " >> /etc/ecs/ecs.config\n",
+                "echo ECS_ENGINE_AUTH_TYPE=dockercfg >> /etc/ecs/ecs.config\n",
+                "echo ECS_ENGINE_AUTH_DATA=\"{\\\"","Docker url", "\\\":{\\\"auth\\\":\\\"", { "Fn::Base64": { "Fn::Join": [ ":", [ { "Ref": "DockerUser" }, { "Ref": "DockerPass" } ] ] } }, "\\\"}}\" >> /etc/ecs/ecs.config\n",
+                "echo \"{\\\"", "docker url" , "\\\":{\\\"auth\\\":\\\"", { "Fn::Base64": { "Fn::Join": [ ":", [ { "Ref": "DockerUser" }, { "Ref": "DockerPass" } ] ] } }, "\\\"}}\" >> /home/ec2-user/.dockercfg\n",
+                "yum install -y aws-cfn-bootstrap\n",
+                "/opt/aws/bin/cfn-init",
+                "         --stack ",
+                {
+                  "Ref": "AWS::StackName"
+                },
+                " ",
+                "         --resource Ec2Instance ",
+                "         --configsets Install ",
+                "         --region ",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "\n",
+                "PATH=$PATH:/usr/local/bin\n",
+                "EC2_AVAIL_ZONE=`curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone`\n",
+                "EC2_REGION=",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "\n",
+                "touch /tmp/userdata.txt\n",
+                "sudo echo $EC2_AVAIL_ZONE > /tmp/userdata.txt\n",
+                "sudo echo $EC2_REGION >> /tmp/userdata.txt\n",
+                "sudo mkdir /mnt/efs\n",
+                "EFS_FILE_SYSTEM_ID=",
+                {
+                  "Ref": "FileSystem"
+                },
+                "\n",
+                "DIR_SRC=$EC2_AVAIL_ZONE.$EFS_FILE_SYSTEM_ID.efs.$EC2_REGION.amazonaws.com\n",
+                "DIR_TGT=/mnt/efs\n",
+                "touch /home/ec2-user/echo.res\n",
+                "sudo echo $EFS_FILE_SYSTEM_ID >> /home/ec2-user/echo.res\n",
+                "sudo echo $EC2_AVAIL_ZONE >> /home/ec2-user/echo.res\n",
+                "sudo echo $EC2_REGION >> /home/ec2-user/echo.res\n",
+                "sudo echo $DIR_SRC >> /home/ec2-user/echo.res\n",
+                "sudo echo $DIR_TGT >> /home/ec2-user/echo.res\n",
+                "sudo mount -t nfs4 $DIR_SRC:/ $DIR_TGT >> /home/ec2-user/echo.res\n",
+                "sudo cp -p /etc/fstab /etc/fstab.back-$(date +%F)\n",
+                "sudo echo -e \"$DIR_SRC:/ \t\t $DIR_TGT \t\t nfs \t\t defaults \t\t 0 \t\t 0\" | tee -a /etc/fstab\n",
+                "(sleep 10 && sudo stop ecs) & \n",
+                "(sleep 20 && sudo start ecs) & \n",
+                "(sleep 30 && /opt/aws/bin/cfn-signal -e $?  --stack  ",{"Ref": "AWS::StackName"}, " --resource ECSAutoScalingGroup    --region ", {"Ref": "AWS::Region"},") &","\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+
+    "AmazonECSTaskExecutioneRole":{
+      "Type":"AWS::IAM::Role",
+      "Properties":{
+        "AssumeRolePolicyDocument":{
+          "Statement":[
+            {
+              "Sid":"",
+              "Effect":"Allow",
+              "Principal":{
+                "Service":[
+                  "ecs-tasks.amazonaws.com"
+                ]
+              },
+              "Action":[
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path":"/",
+        "Policies":[
+          {
+            "PolicyName":"AmazonECSTaskExecutionRolePolicy",
+            "PolicyDocument":{
+              "Statement":[
+                {
+                  "Effect":"Allow",
+                  "Action":[
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource":"*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    "CPUAlarm" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "CPU alarm for instance",
+        "AlarmName": { "Fn::Sub": "${Tier}-cpu-alarm" },
+        "AlarmActions" : [ { "Ref" : "AlarmTopic" },{"Ref":"StepScaling"}],
+        "MetricName" : "CPUUtilization",
+        "Namespace" : "AWS/ECS",
+        "Statistic" : "Average",
+        "Period" : "300",
+        "EvaluationPeriods" : "1",
+        "Threshold" : "80",
+        "ComparisonOperator" : "GreaterThanOrEqualToThreshold",
+        "Dimensions" : [ {
+          "Name" : "ClusterName",
+          "Value" : { "Ref" : "AWS::StackName" }
+        } ]
+      }
+    },
+
+    "MemoryAlarm" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "Memory Utilization alarm for instance",
+        "AlarmName": { "Fn::Sub": "${Tier}-Memory-alarm" },
+        "AlarmActions" : [ { "Ref" : "AlarmTopic" },{"Ref":"StepScaling"}],
+        "MetricName" : "MemoryUtilization",
+        "Namespace" : "AWS/ECS",
+        "Statistic" : "Average",
+        "Period" : "300",
+        "EvaluationPeriods" : "1",
+        "Threshold" : "80",
+        "ComparisonOperator" : "GreaterThanOrEqualToThreshold",
+        "Dimensions" : [ {
+          "Name" : "ClusterName",
+          "Value" : { "Ref" : "AWS::StackName" }
+        } ]
+      }
+    },
+
+    "HighstatusCheckFailed" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmName": { "Fn::Sub": "${Tier}-HighstatusCheckFailed" },
+        "AlarmDescription" : "Alarm For Status Check Fail",
+        "AlarmActions" : [ { "Ref" : "AlarmTopic" } ],
+        "InsufficientDataActions" : [ { "Ref" : "AlarmTopic" },{"Ref":"StepScaling"} ],
+        "MetricName" : "StatusCheckFailed",
+        "Namespace" : "AWS/EC2",
+        "Statistic" : "Average",
+        "Period" : "60",
+        "EvaluationPeriods" : "1",
+        "Threshold" : "1",
+        "ComparisonOperator" : "GreaterThanOrEqualToThreshold",
+        "Dimensions" : [ {
+          "Name" : "AutoScalingGroupName",
+          "Value" : { "Ref" : "ECSAutoScalingGroup" }
+        } ]
+      }
+    },
+
+    "Dashboard":{
+      "Type":"AWS::CloudWatch::Dashboard",
+      "Condition":"CreateDashboard",
+      "Properties": {
+        "DashboardName": {"Ref":"AWS::StackName"},
+        "DashboardBody":{
+          "Fn::Join":[
+            "",[
+              "{\"widgets\": [{\"type\": \"metric\",\"x\": 3,\"y\": 0,\"width\": 6,\"height\": 6,\"properties\": {\"view\": \"timeSeries\",\"stacked\": true,\"metrics\": [[ \"AWS/ECS\",\"CPUUtilization\",\"ClusterName\",\"",{"Ref":"AWS::StackName"},"\"]],\"region\": \"us-east-1\",\"title\":\"CPU Utilization\"}},{\"type\":\"metric\",\"x\":3,\"y\":6,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/ECS\",\"MemoryUtilization\",\"ClusterName\",\"",
+              {"Ref":"AWS::StackName"},"\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"Memory Utilization\"}},{\"type\":\"metric\",\"x\":9,\"y\":6,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/ECS\",\"MemoryReservation\",\"ClusterName\",\"",
+              {"Ref":"AWS::StackName"},"\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"Memory Reservation\"}},{\"type\":\"metric\",\"x\":3,\"y\":12,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/ECS\",\"CPUReservation\",\"ClusterName\",\"",
+              {"Ref":"AWS::StackName"},"\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"CPU Reservation\"}},{\"type\":\"metric\",\"x\":9,\"y\":0,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/EC2\",\"NetworkIn\",\"AutoScalingGroupName\",\"",
+              {"Ref":"ECSAutoScalingGroup"},"\"],[\"AWS/EC2\",\"NetworkOut\",\"AutoScalingGroupName\",\"", {"Ref":"ECSAutoScalingGroup"},"\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"NetworkIn,NetworkOut\"}},{\"type\":\"metric\",\"x\":15,\"y\":0,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",{"Fn::Sub": "${Tier}-cpu-alarm"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-cpu-alarm"},"\"]}}},{\"type\":\"metric\",\"x\":18,\"y\":9,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",
+              {"Fn::Sub": "${Tier}-Memory-alarm"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-Memory-alarm"},"\"]}}},{\"type\":\"metric\",\"x\":15,\"y\":6,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",
+              {"Fn::Sub": "${Tier}-HighstatusCheckFailed"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-HighstatusCheckFailed"},"\"]}}} ]}"
+            ]
+          ]
+        }
+      }
+    },
+
+    "AlarmTopic" : {
+      "Type" : "AWS::SNS::Topic",
+      "Properties" : {
+        "TopicName": { "Fn::Sub": "${Tier}-targets" },
+        "Subscription" : [ {
+          "Endpoint" : { "Ref" : "OperatorEmail" },
+          "Protocol" : "email"
+        } ]
+      }
+    },
+
+    "EC2Role":{
+      "Type":"AWS::IAM::Role",
+      "Properties":{
+        "AssumeRolePolicyDocument":{
+          "Statement":[
+            {
+              "Effect":"Allow",
+              "Principal":{
+                "Service":[
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action":[
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path":"/",
+        "Policies":[
+          {
+            "PolicyName":"docker-ecs-service",
+            "PolicyDocument":{
+              "Statement":[
+                {
+                  "Effect":"Allow",
+                  "Action":[
+                    "ecs:CreateCluster",
+                    "ecs:DeregisterContainerInstance",
+                    "ecs:DiscoverPollEndpoint",
+                    "ecs:Poll",
+                    "ecs:RegisterContainerInstance",
+                    "ecs:StartTelemetrySession",
+                    "ecs:Submit*",
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource":"*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    "AutoscalingRole":{
+      "Type":"AWS::IAM::Role",
+      "Properties":{
+        "AssumeRolePolicyDocument":{
+          "Statement":[
+            {
+              "Effect":"Allow",
+              "Principal":{
+                "Service":[
+                  "application-autoscaling.amazonaws.com"
+                ]
+              },
+              "Action":[
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path":"/",
+        "Policies":[
+          {
+            "PolicyName":"docker-service-autoscaling",
+            "PolicyDocument":{
+              "Statement":[
+                {
+                  "Effect":"Allow",
+                  "Action":[
+                    "application-autoscaling:*",
+                    "cloudwatch:DescribeAlarms",
+                    "cloudwatch:PutMetricAlarm",
+                    "ecs:DescribeServices",
+                    "ecs:UpdateService"
+                  ],
+                  "Resource":"*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    "EC2InstanceProfile":{
+      "Type":"AWS::IAM::InstanceProfile",
+      "Properties":{
+        "Path":"/",
+        "Roles":[
+          {
+            "Ref":"EC2Role"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs":{
+
+    "ecscluster":{
+      "Value":{
+        "Ref":"ECSCluster"
+      }
+    },
+    "ECSStackName": {
+      "Description": "ECS StackName",
+      "Value": {
+        "Ref": "AWS::StackName"
+      }
+    }
+  }
+}

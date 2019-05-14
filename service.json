@@ -1,0 +1,692 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Service and Task-definition for service",
+  "Parameters":{
+    "Version":{
+      "Description":"Version of the Docker container",
+      "Type":"String"
+    },
+    "HostedZone": {
+      "Type": "String",
+      "Description": "The DNS name of an existing Amazon Route 53 hosted zone",
+      "Default": "hosted zone"
+    },
+    "SecurityGroup": {
+      "Description": "Select the Security Group to apply to the Application Load Balancer",
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "SubnetId1": {
+      "Description": "subnet-1",
+      "Type": "String",
+      "Default": "subnet-xxxxx"
+    },
+    "SubnetId2": {
+      "Description": "subnet-2",
+      "Type": "String",
+      "Default": "subnet-xxxxxx"
+    },
+    "DesiredCount": {
+      "Description": "The number of containers to run for this service.",
+      "Type": "String",
+      "Default":"1"
+    },
+    "MaxCapacity":{
+      "Type":"String",
+      "Default":"3",
+      "Description":"Max Number of containers to run for this service"
+    },
+    "MinCapacity":{
+      "Type":"String",
+      "Default":"1",
+      "Description":"Min Number of containers to run for this service"
+    },
+    "DNSSubdomain": {
+      "Description": "The DNS subdomain",
+      "Type": "String"
+    },
+    "AlarmId":{
+      "Type":"String",
+      "Default":"arn:aws:sns:us-east-1:xxxxxxxxxxxxx:targets"
+    },
+    "Tier":{
+      "Type" : "String",
+      "Default" : "dev",
+      "AllowedValues" : ["dev", "pprd","prod"],
+      "Description" : "Select the Tier to deploy application"
+    },
+    "VpcId":{
+      "Type":"AWS::EC2::VPC::Id",
+      "Description":"Select a VPC that allows instances to access the Internet."
+    },
+    "ClusterName":{
+      "Description":"Cluster for the container service",
+      "Type":"String",
+      "Default":"dev-env",
+      "AllowedValues":["dev-env","pprd-env","prod-env"]
+    },
+    "CreationDate":{
+      "Description":"Date of the cluster deployment",
+      "Type":"String",
+      "ConstraintDescription" : "Date and time of creation"
+    },
+    "Hostname":{
+      "Description":"HOSTNAME of the Service",
+      "Type":"String"
+    },
+    "Listener":{
+      "Description":"Select the cluster name based on environment type",
+      "Type":"String",
+      "Default":"arn:aws:elasticloadbalancing:us-east-1:xxxxxxxxxxxxx:listener/app/alb/xxxxxxxxxxxx"
+    },
+    "ECSALB":{
+      "Description":"Application Load Balancer for Dev Tier",
+      "Type":"String",
+      "Default":"alb-xxxxxxxx.us-east-1.elb.amazonaws.com"
+    },
+    "Owner":{
+      "Type":"String",
+      "Default":"xxxxxxxxxxxxx",
+      "Description":"Owner of this Stack"
+    },
+    "ALBfullname":{
+      "Type":"String",
+      "Default":"app/alb/xxxxxxxxxx",
+      "Description": "Full Name of ALB to get Healthy host count"
+    },
+    "MaintenanceMode":{
+      "Type":"String",
+      "Default":"false",
+      "Description": "To Enable Maintenance mode"
+    }
+  },
+  "Conditions":{
+    "CreateDashboard":{"Fn::Equals":[{"Ref":"Tier"},"prod"]},
+    "EnableMaintenanceMode":{"Fn::Equals":[{"Ref":"MaintenanceMode"},"true"]}
+  },
+  "Resources":{
+    "DNSZone": {
+      "Type": "AWS::Route53::RecordSet",
+      "Properties": {
+        "Name": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "DNSSubdomain"
+              },
+              ".",
+              {
+                "Ref": "HostedZone"
+              },
+              "."
+            ]
+          ]
+        },
+        "Type":"CNAME",
+        "Comment": "Zone apex alias targeted to ElasticLoadBalancer.",
+        "TTL":"300",
+        "HostedZoneId":"xxxxxxxxxx",
+        "ResourceRecords":[{"Ref":"ECSALB"}]
+      }
+    },
+
+    "service":{
+      "Type":"AWS::ECS::Service",
+      "DependsOn":["ECSServiceRole","ServiceRolePolicies","HTTPSListener"],
+      "Properties":{
+        "Cluster": { "Ref":"ClusterName" },
+        "DesiredCount": {"Ref":"DesiredCount"},
+        "DeploymentConfiguration": {
+          "MaximumPercent" : "150",
+          "MinimumHealthyPercent": "100"
+        },
+        "ServiceName" : { "Fn::Sub": "service-name-${Tier}" },
+        "LoadBalancers":[
+          {
+            "ContainerName":{"Ref":"AWS::StackName"},
+            "ContainerPort":"xxxx",
+            "TargetGroupArn":{"Ref":"ecsTG"}
+          }
+        ],
+        "Role":{
+          "Ref":"ECSServiceRole"
+        },
+        "TaskDefinition":{"Ref" : "taskdefinition"}
+      }
+    },
+
+    "ServiceScalingTarget":{
+      "Type":"AWS::ApplicationAutoScaling::ScalableTarget",
+      "DependsOn":"service",
+      "Properties":{
+        "MaxCapacity":{"Ref":"MaxCapacity"},
+        "MinCapacity":{"Ref":"MinCapacity"},
+        "ResourceId":{
+          "Fn::Join":[
+            "",
+            [
+              "service/", {"Ref":"ClusterName"},
+              "/",
+              {
+                "Fn::GetAtt":[
+                  "service",
+                  "Name"
+                ]
+              }
+            ]
+          ]
+        },
+        "RoleARN":{
+          "Fn::GetAtt":[
+            "ECSServiceRole",
+            "Arn"
+          ]
+        },
+        "ScalableDimension":"ecs:service:DesiredCount",
+        "ServiceNamespace":"ecs"
+      }
+    },
+    "ECSServiceRole":{
+      "Type":"AWS::IAM::Role",
+      "Properties":{
+        "AssumeRolePolicyDocument":{
+          "Statement":[
+            {
+              "Effect":"Allow",
+              "Principal":{
+                "Service":[
+                  "ecs.amazonaws.com",
+                  "application-autoscaling.amazonaws.com"
+                ]
+              },
+              "Action":[
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path":"/",
+        "Policies":[
+          {
+            "PolicyName": { "Fn::Sub": "${Tier}-service" },
+            "PolicyDocument":{
+              "Statement":[
+                {
+                  "Effect":"Allow",
+                  "Action":[
+                    "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+                    "elasticloadbalancing:DeregisterTargets",
+                    "elasticloadbalancing:Describe*",
+                    "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+                    "elasticloadbalancing:RegisterTargets",
+                    "ec2:Describe*",
+                    "ec2:AuthorizeSecurityGroupIngress",
+                    "application-autoscaling:*",
+                    "cloudwatch:DescribeAlarms",
+                    "cloudwatch:PutMetricAlarm",
+                    "ecs:DescribeServices",
+                    "ecs:UpdateService"
+                  ],
+                  "Resource":"*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    "ServiceRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": { "Fn::Sub": "${Tier}-ServiceRole" },
+        "Roles": [ { "Ref": "ECSServiceRole" } ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ec2:Describe*",
+                "elasticloadbalancing:*",
+                "ecs:*",
+                "iam:ListInstanceProfiles",
+                "iam:ListRoles",
+                "iam:PassRole",
+                "route53:*"
+              ],
+              "Resource": [
+                "*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ecs:RunTask"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "ArnEquals": {
+                  "ecs:cluster": { "Fn::Join": ["", ["arn:aws:ecs:", { "Ref": "AWS::Region" }, ":", { "Ref": "AWS::AccountId" }, ":cluster/",  { "Ref":"ClusterName" } ]] }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "CPUScalingPolicy1":{
+      "Type":"AWS::ApplicationAutoScaling::ScalingPolicy",
+      "Properties":{
+        "PolicyName":"CPUStepPolicy1",
+        "PolicyType":"StepScaling",
+        "ScalingTargetId":{
+          "Ref":"ServiceScalingTarget"
+        },
+        "StepScalingPolicyConfiguration":{
+          "AdjustmentType":"PercentChangeInCapacity",
+          "Cooldown":"60",
+          "MetricAggregationType":"Average",
+          "StepAdjustments":[
+            {
+              "MetricIntervalLowerBound":"0",
+              "ScalingAdjustment":"1"
+            }
+          ]
+        }
+      }
+    },
+    "CPUScalingPolicy2":{
+      "Type":"AWS::ApplicationAutoScaling::ScalingPolicy",
+      "Properties":{
+        "PolicyName":"CPUStepPolicy2",
+        "PolicyType":"StepScaling",
+        "ScalingTargetId":{
+          "Ref":"ServiceScalingTarget"
+        },
+        "StepScalingPolicyConfiguration":{
+          "AdjustmentType":"PercentChangeInCapacity",
+          "Cooldown":"60",
+          "MetricAggregationType":"Average",
+          "StepAdjustments":[
+            {
+              "MetricIntervalUpperBound":"-1",
+              "ScalingAdjustment":"-1"
+            }
+          ]
+        }
+      }
+    },
+    "MemoryScalingPolicy1":{
+      "Type":"AWS::ApplicationAutoScaling::ScalingPolicy",
+      "Properties":{
+        "PolicyName":"MemoryStepPolicy1",
+        "PolicyType":"StepScaling",
+        "ScalingTargetId":{
+          "Ref":"ServiceScalingTarget"
+        },
+        "StepScalingPolicyConfiguration":{
+          "AdjustmentType":"PercentChangeInCapacity",
+          "Cooldown":"90",
+          "MetricAggregationType":"Average",
+          "StepAdjustments":[
+            {
+              "MetricIntervalLowerBound":"0",
+              "ScalingAdjustment":"1"
+            }
+          ]
+        }
+      }
+    },
+    "EndpointHealthCheck": {
+      "Type": "AWS::Route53::HealthCheck",
+      "Properties": {
+        "HealthCheckConfig": {
+          "Port": "443",
+          "Type": "HTTPS",
+          "ResourcePath": "/",
+          "FullyQualifiedDomainName": {"Ref":"Hostname"},
+          "RequestInterval": "30",
+          "FailureThreshold": "3"
+        },
+        "HealthCheckTags" : [
+          {
+            "Key": "Name",
+            "Value": {"Ref":"AWS::StackName"}
+          },
+          {
+            "Key": "Environment",
+            "Value": { "Ref":"Tier" }
+          },
+          {
+            "Key": "ProjectName",
+            "Value": "xxxxxxxx"
+          },
+          {
+            "Key":"Payer",
+            "Value" : "xxxxxxxx"
+          },
+          {
+            "Key":"Owner",
+            "Value" : {"Ref":"Owner"}
+          },
+          {
+            "Key":"Service",
+            "Value":"ECS"
+          }
+        ]
+      }
+    },
+
+    "HTTPSListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Properties": {
+        "Actions":[{"Type":"forward", "TargetGroupArn":{"Ref":"ecsTG"}}],
+        "Conditions": [
+          {
+            "Field": "host-header",
+            "Values":  [{ "Ref":"Hostname" }]
+          }
+        ],
+        "ListenerArn": { "Ref": "Listener" },
+        "Priority": {"Fn::If":["EnableMaintenanceMode","200","2"]}
+      }
+    },
+
+    "HTTPSMaintenanceMode": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Condition":"EnableMaintenanceMode",
+      "Properties": {
+        "Actions":[{
+          "Type":"fixed-response",
+          "FixedResponseConfig":
+          {
+            "ContentType":"text/html",
+            "MessageBody":"<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body,html{height:100%;margin:0;}.bg {background-image: url(\"https://i.gifer.com/EKkZ.gif\");height: 100%;background-position: center;background-repeat: no-repeat;background-size: cover;}</style></head><body><div class=\"bg\"></div></body></html>",
+            "StatusCode":"503"
+          }
+        }],
+        "Conditions": [
+          {
+            "Field": "host-header",
+            "Values":  [{ "Ref":"Hostname" }]
+          }
+        ],
+        "ListenerArn": { "Ref": "Listener" },
+        "Priority": {"Fn::If":["EnableMaintenanceMode","50","200"]}
+      }
+    },
+
+    "ecsTG":{
+      "Type":"AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties":{
+        "HealthCheckIntervalSeconds":"180",
+        "HealthCheckPath":"/",
+        "HealthCheckProtocol":"HTTPS",
+        "HealthCheckTimeoutSeconds":"60",
+        "HealthyThresholdCount":"3",
+        "Name": { "Fn::Sub": "${Tier}-targets" },
+        "TargetGroupAttributes":[
+          {
+            "Key":"deregistration_delay.timeout_seconds",
+            "Value": "30"
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value":"true"
+          },
+          {
+            "Value": "86400",
+            "Key": "stickiness.lb_cookie.duration_seconds"
+          }
+        ],
+        "Port":"8443",
+        "Protocol":"HTTPS",
+        "UnhealthyThresholdCount":"3",
+        "VpcId":{
+          "Ref":"VpcId"
+        },
+        "Tags":[
+          {
+            "Key":"Name",
+            "Value":{ "Fn::Sub": "${Tier}-targets" }
+          },
+          {
+            "Key": "Environment",
+            "Value": { "Ref":"Tier" }
+          },
+          {
+            "Key": "ProjectName",
+            "Value": "xxxxxxx"
+          },
+          {
+            "Key":"Payer",
+            "Value" : "xxxxxxxx"
+          },
+          {
+            "Key":"Owner",
+            "Value" : {"Ref":"Owner"}
+          },
+          {
+            "Key":"Service",
+            "Value":"ECS"
+          }
+        ]
+      }
+    },
+
+    "HealthyHostCount" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "DependsOn":["ecsTG","taskdefinition","service"],
+      "Properties" : {
+        "AlarmDescription" : "Alarm For Status Check Fail",
+        "AlarmName": { "Fn::Sub": "${Tier}-lb-HealthyHostCount" },
+        "AlarmActions" :[{ "Ref":"AlarmId"}],
+        "InsufficientDataActions" :[{ "Ref":"AlarmId"}],
+        "MetricName" : "HealthyHostCount",
+        "Namespace" : "AWS/ApplicationELB",
+        "Statistic" : "Average",
+        "Period" : "60",
+        "EvaluationPeriods" : "2",
+        "Threshold" : "1",
+        "ComparisonOperator" : "LessThanOrEqualToThreshold",
+        "Dimensions" : [
+          {
+            "Name" : "LoadBalancer",
+            "Value" :{"Ref":"ALBfullname"}
+          },
+          {
+            "Name" : "TargetGroup",
+            "Value" :{"Fn::GetAtt":["ecsTG","TargetGroupFullName"]}
+          }
+        ]
+      }
+    },
+    "CPUAlarm1" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "CPU alarm for my ECS Containers",
+        "AlarmName": { "Fn::Sub": "${Tier}-cpu-alarm-1" },
+        "AlarmActions" : [{ "Ref":"AlarmId"},{"Ref":"CPUScalingPolicy1"}],
+        "MetricName" : "CPUUtilization",
+        "Namespace" : "AWS/ECS",
+        "Statistic" : "Average",
+        "Period" : "120",
+        "EvaluationPeriods" : "2",
+        "Threshold" : "80",
+        "ComparisonOperator" : "GreaterThanOrEqualToThreshold",
+        "Dimensions" : [
+          {"Name" : "ServiceName", "Value" : { "Ref" : "AWS::StackName" }},
+          {"Name" : "ClusterName", "Value" : { "Ref" : "ClusterName" }}
+        ]
+      }
+    },
+    "CPUAlarm2" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "CPU alarm for my ECS Containers",
+        "AlarmName": { "Fn::Sub": "${Tier}-cpu-alarm-2" },
+        "AlarmActions" : [{ "Ref":"AlarmId"},{"Ref":"CPUScalingPolicy2"}],
+        "MetricName" : "CPUUtilization",
+        "Namespace" : "AWS/ECS",
+        "Statistic" : "Average",
+        "Period" : "120",
+        "EvaluationPeriods" : "2",
+        "Threshold" : "60",
+        "ComparisonOperator" : "LessThanOrEqualToThreshold",
+        "Dimensions" : [
+          {"Name" : "ServiceName", "Value" : { "Ref" : "AWS::StackName" }},
+          {"Name" : "ClusterName", "Value" : { "Ref" : "ClusterName" }}
+        ]
+      }
+    },
+    "EndpointCriticalAlarm" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "End point URL Health Status",
+        "AlarmName": { "Fn::Sub": "${Tier}-Endpoint" },
+        "AlarmActions" : [{ "Ref":"AlarmId"}],
+        "MetricName" : "HealthCheckPercentageHealthy",
+        "Namespace" : "AWS/Route53",
+        "Statistic" : "Average",
+        "Period" : "120",
+        "EvaluationPeriods" : "2",
+        "Threshold" : "90",
+        "ComparisonOperator" : "LessThanOrEqualToThreshold",
+        "ActionsEnabled": "true",
+        "Dimensions":[
+          {"Name":"HealthCheckId", "Value":{"Ref":"EndpointHealthCheck"}}
+        ]
+      }
+    },
+    "MemoryUtilizattionAlarm1" : {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+        "AlarmDescription" : "Memory Utilization alarm for my ECS Containers",
+        "AlarmName": { "Fn::Sub": "${Tier}-Memory-alarm-1" },
+        "AlarmActions" : [{ "Ref":"AlarmId"}, {"Ref":"MemoryScalingPolicy1"}],
+        "MetricName" : "MemoryUtilization",
+        "Namespace" : "AWS/ECS",
+        "Statistic" : "Average",
+        "Period" : "300",
+        "EvaluationPeriods" : "2",
+        "Threshold" : "90",
+        "ComparisonOperator" : "GreaterThanOrEqualToThreshold",
+        "Dimensions" : [
+          {"Name" : "ServiceName", "Value" : { "Ref" : "AWS::StackName" }},
+          {"Name" : "ClusterName", "Value" : { "Ref" : "ClusterName" }}
+        ]
+      }
+    },
+
+    "taskdefinition": {
+      "Type": "AWS::ECS::TaskDefinition",
+      "Properties": {
+        "Family": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::StackName"
+              }
+            ]
+          ]
+        },
+        "ContainerDefinitions": [
+          {
+            "Name": {"Ref":"AWS::StackName"},
+            "Cpu": "128",
+            "Essential": "true",
+            "Image": {
+              "Fn::Join": [
+                "",
+                [
+                  "Registry url",
+                  ":",
+                  {
+                    "Ref": "Version"
+                  }
+                ]
+              ]
+            },
+            "Memory": "1100",
+            "LogConfiguration": {
+              "LogDriver": "syslog",
+              "Options": {
+                "syslog-address": "tcp://localhost:514",
+                "syslog-facility": "local4",
+                "syslog-format": "rfc5424micro",
+                "tag": "{{.Name}}"
+              }
+            },
+            "Environment": [
+              {
+                "Name": "ENV",
+                "Value": {"Ref":"Tier"}
+              },
+              {
+                "Name": "HOSTNAME",
+                "Value": {"Ref":"Hostname"}
+              },
+              {
+                "Name": "DateofCreation",
+                "Value": {"Ref":"CreationDate"}
+              }
+            ],
+            "PortMappings": [
+              {
+                "HostPort": "0",
+                "ContainerPort": "8443"
+              }
+            ],
+            "MountPoints": [
+              {
+                "ContainerPath": "/data",
+                "SourceVolume": "credentials"
+              }
+            ]
+          }
+        ],
+        "Volumes": [
+          {
+            "Host": {
+              "SourcePath": "/mnt/efs/"
+            },
+            "Name": "secrets"
+          }
+        ]
+      }
+    },
+    "Dashboard":{
+      "Type":"AWS::CloudWatch::Dashboard",
+      "Condition":"CreateDashboard",
+      "Properties": {
+        "DashboardName": {"Ref":"AWS::StackName"},
+        "DashboardBody":{
+          "Fn::Join":[
+            "",[
+              "{\"widgets\": [{\"type\": \"metric\",\"x\": 3,\"y\": 0,\"width\": 6,\"height\": 6,\"properties\": {\"view\": \"timeSeries\",\"stacked\": true,\"metrics\": [[ \"AWS/ECS\",\"CPUUtilization\",\"ServiceName\",\"",{"Ref":"AWS::StackName"},"\", \"ClusterName\",\"",{"Ref":"ClusterName"},"\"]],\"region\": \"us-east-1\",\"title\":\"CPU Utilization\"}},{\"type\":\"metric\",\"x\":3,\"y\":6,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/ECS\",\"MemoryUtilization\",\"ServiceName\",\"",
+              {"Ref":"AWS::StackName"},"\",\"ClusterName\",\"",{"Ref":"ClusterName"}, "\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"Memory Utilization\"}},{\"type\":\"metric\",\"x\":9,\"y\":0,\"width\":6,\"height\":6,\"properties\":{\"metrics\":[[\"AWS/Route53\",\"HealthCheckStatus\",\"HealthCheckId\",\"",
+              {"Ref":"EndpointHealthCheck"},"\"]],\"period\":300,\"stat\":\"Average\",\"region\":\"us-east-1\",\"title\":\"EndPointHealthCheck\"}},{\"type\":\"metric\",\"x\":15,\"y\":0,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",{"Fn::Sub": "${Tier}-cpu-alarm-1"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-cpu-alarm-1"},"\"]}}},{\"type\":\"metric\",\"x\":18,\"y\":9,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",
+              {"Fn::Sub": "${Tier}-Memory-alarm-1"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-Memory-alarm-1"},"\"]}}},{\"type\":\"metric\",\"x\":9,\"y\":6,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",{"Fn::Sub": "${Tier}-cpu-alarm-2"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-cpu-alarm-2"},"\"]}}},{\"type\":\"metric\",\"x\":15,\"y\":6,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",
+              {"Fn::Sub": "${Tier}-lb-HealthyHostCount"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-lb-HealthyHostCount"},"\"]}}},{\"type\":\"metric\",\"x\":18,\"y\":6,\"width\":3,\"height\":6,\"properties\":{\"title\":\"",
+              {"Fn::Sub": "${Tier}-Endpoint"},"\",\"annotations\":{\"alarms\":[\"arn:aws:cloudwatch:us-east-1:xxxxxxxxxxxxx:alarm:",{"Fn::Sub": "${Tier}-Endpoint"},"\"]}}} ]}"
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "Outputs":{
+    "taskdefinition" : {
+      "Description" : "Docker Taskdefinition ID to services",
+      "Value" : { "Ref": "taskdefinition" }
+    },
+    "ecsservice":{
+      "Value":{
+        "Ref":"service"
+      }
+    }
+
+  }
+}

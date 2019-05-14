@@ -1,0 +1,146 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": " Template that stands up an ElastiCache clustered mode",
+  "Parameters": {
+    "CacheNodeType": {
+      "Description": "The instance type the nodes will launch under.",
+      "Type": "String",
+      "Default": "cache.t2.small",
+      "AllowedValues": [
+        "cache.t2.micro",
+        "cache.t2.small",
+        "cache.t2.medium",
+        "cache.m3.medium"
+      ]
+    },
+    "SecurityGroup": {
+      "Description": "Select the Security Group to apply to the Application Load Balancer",
+      "Type": "String",
+      "Default": "sg-xxxxxxx"
+    },
+    "MultiAZSupport": {
+      "Description": "Indicates whether Multi-AZ is enabled. When Multi-AZ is enabled, a read-only replica is automatically promoted to a read-write primary cluster if the existing primary cluster fails. If you specify true, you must specify a value greater than 1 for the NumCacheClusters property.",
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": ["true", "false"]
+    },
+    "AlarmId":{
+      "Type":"String",
+      "Default":"arn:aws:sns:us-east-1:xxxxxxxxxxxxx:targets"
+    },
+    "Tier":{
+      "Description": "Select the Tier to deploy",
+      "Type":"String",
+      "Default":"dev",
+      "AllowedValues":["dev","pprd","prod"]
+    },
+    "NumCacheClusters": {
+      "Description": "The number of cache clusters for this replication group. If MultiAZ support is enabled, you must specify a value greater than 1.",
+      "Default": "1",
+      "Type": "Number",
+      "MinValue": "1",
+      "MaxValue": "6"
+    },
+    "ReplicationGroupDescription": {
+      "Description": "The description of the replication group.",
+      "Type": "String",
+      "Default": "ElastiCache in Redis Clustered Mode"
+    },
+    "ParameterGroup": {
+      "Description": "The description of the replication group.",
+      "Type": "String",
+      "Default": "default.redis4.0.cluster.on"
+    },
+    "VpcId": {
+      "Description": "The VPC to create this ReplicationGroup under",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SnapshotRetentionLimit": {
+      "Description": "The number of days that ElastiCache retains automatic snapshots before deleting them.",
+      "Type": "Number",
+      "Default": "1"
+    },
+    "SnapshotWindow": {
+      "Description": "The time range (in UTC) when ElastiCache takes a daily snapshot of your node group.",
+      "Type": "String",
+      "Default": "06:30-07:30",
+      "AllowedPattern": "\\d{2}:\\d{2}-\\d{2}:\\d{2}",
+      "ConstraintDescription": "must be a valid timestamp range, for example 05:00-09:00"
+    },
+    "PreferredMaintenanceWindow": {
+      "Description": "The weekly time range during which system maintenance can occur. Use the following format to specify a time range: ddd:hh24:mi-ddd:hh24:mi (24H Clock UTC).",
+      "Type": "String",
+      "Default": "sun:03:00-sun:04:00",
+      "AllowedPattern": "(mon|tue|wed|thu|fri|sat|sun):\\d{2}:\\d{2}-(mon|tue|wed|thu|fri|sat|sun):\\d{2}:\\d{2}",
+      "ConstraintDescription": "must be a valid timestamp range with day of week"
+    },
+    "Version": {
+      "Description": "Redis Version",
+      "Type": "String",
+      "Default": "4.0.10"
+    },
+    "SubnetId1": {
+      "Description": "subnet-1",
+      "Type": "String",
+      "Default": "subnet-xxxxxxxx"
+    },
+    "SubnetId2": {
+      "Description": "subnet-2",
+      "Type": "String",
+      "Default": "subnet-xxxxxxxxx"
+    },
+    "Owner": {
+      "Description": "Owner for this stack",
+      "Type": "String",
+      "Default": "xxxxxxxxxxxxx"
+    }
+  },
+  "Resources": {
+
+    "SubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Subnet Group for Replication Group",
+        "CacheSubnetGroupName" : { "Fn::Sub":"ElastiCache-${Tier}-subnet"},
+        "SubnetIds": [
+          {
+            "Ref": "SubnetId1"
+          },
+          {
+            "Ref": "SubnetId2"
+          }
+        ]
+      }
+    },
+
+    "ElastiCache": {
+      "Type": "AWS::ElastiCache::ReplicationGroup",
+      "Properties": {
+        "ReplicationGroupId": {"Ref": "AWS::StackName"},
+        "AtRestEncryptionEnabled" : true,
+        "AutomaticFailoverEnabled": {"Ref": "MultiAZSupport"},
+        "CacheNodeType": {"Ref": "CacheNodeType"},
+        "CacheSubnetGroupName": {"Ref": "SubnetGroup"},
+        "CacheParameterGroupName" : {"Ref": "ParameterGroup"},
+        "SecurityGroupIds" : [{"Ref" : "SecurityGroup"}],
+        "Engine": "redis",
+        "EngineVersion":{"Ref": "Version"},
+        "NumCacheClusters": {"Ref": "NumCacheClusters"},
+        "Port": {"Ref": "RedisPort"},
+        "PreferredMaintenanceWindow": {"Ref": "PreferredMaintenanceWindow"},
+        "ReplicationGroupDescription": {"Ref": "ReplicationGroupDescription"},
+        "SnapshotRetentionLimit": {"Ref": "SnapshotRetentionLimit"},
+        "SnapshotWindow": {"Ref": "SnapshotWindow"},
+        "NotificationTopicArn" : {"Ref": "AlarmId"},
+        "Tags": [
+          {"Key": "Name", "Value": { "Fn::Sub": "elasticache-${Tier}" }},
+          {"Key": "Tier", "Value": { "Fn::Sub": "${Tier}" }},
+          {"Key": "Environment", "Value": { "Ref":"Tier" }},
+          {"Key":"Payer", "Value" : "xxxxxxxxx"},
+          {"Key":"Owner", "Value" : {"Ref":"Owner"}},
+          {"Key":"Service", "Value" : "Elasticache"}
+        ]
+      }
+    }
+  }
+}
